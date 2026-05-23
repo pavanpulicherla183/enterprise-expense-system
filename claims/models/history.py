@@ -47,6 +47,10 @@ class ClaimStatusHistory(models.Model):
     class Meta:
         db_table = "claim_status_history"
         ordering = ["-changed_at"]
+        indexes = [
+            models.Index(fields=["claim"]),
+            models.Index(fields=["changed_at"]),
+        ]
 
     def __str__(self) -> str:
         """

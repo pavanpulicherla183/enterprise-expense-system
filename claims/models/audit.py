@@ -60,6 +60,12 @@ class AuditLog(models.Model):
     class Meta:
         db_table = "audit_logs"
         ordering = ["-timestamp"]
+        indexes = [
+            models.Index(fields=["claim"]),
+            models.Index(fields=["actor"]),
+            models.Index(fields=["timestamp"]),
+            models.Index(fields=["action"]),
+        ]
 
     def __str__(self) -> str:
         """

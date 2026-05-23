@@ -56,6 +56,12 @@ class EvidenceReuseFlag(models.Model):
     class Meta:
         db_table = "evidence_reuse_flags"
         ordering = ["-flagged_at"]
+        indexes = [
+            models.Index(fields=["evidence"]),
+            models.Index(fields=["primary_claim"]),
+            models.Index(fields=["secondary_claim"]),
+            models.Index(fields=["flagged_at"]),
+        ]
 
     def __str__(self) -> str:
         """

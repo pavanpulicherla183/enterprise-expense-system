@@ -65,6 +65,11 @@ class Evidence(models.Model):
     class Meta:
         db_table = "evidence"
         ordering = ["-uploaded_at"]
+        indexes = [
+            models.Index(fields=["claim"]),
+            models.Index(fields=["content_hash"]),
+            models.Index(fields=["uploaded_at"]),
+        ]
 
     def __str__(self) -> str:
         """
@@ -75,7 +80,16 @@ class Evidence(models.Model):
     def save(self, *args, **kwargs):
         """
         Automatically generate SHA256 hash before saving.
+
+        Files are processed in chunks to avoid loading
+        large uploads entirely into memory, improving
+        scalability and upload performance under high
+        concurrency.
+
+        After hashing, the file pointer is reset to
+        ensure compatibility with storage backends.
         """
+
         if self.file and not self.content_hash:
             sha256 = hashlib.sha256()
 
@@ -83,6 +97,9 @@ class Evidence(models.Model):
                 sha256.update(chunk)
 
             self.content_hash = sha256.hexdigest()
+
+            # Reset file pointer after hashing.
+            self.file.seek(0)
 
         super().save(*args, **kwargs)
 

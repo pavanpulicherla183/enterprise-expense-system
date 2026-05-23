@@ -66,6 +66,12 @@ class Claim(models.Model):
     class Meta:
         db_table = "claims"
         ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["status"]),
+            models.Index(fields=["employee"]),
+            models.Index(fields=["created_at"]),
+            models.Index(fields=["status", "created_at"]),
+        ]
 
     def __str__(self) -> str:
         """

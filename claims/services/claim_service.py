@@ -3,9 +3,13 @@ Business logic services for claim workflows.
 """
 
 from django.db import transaction
-from claims.models import AuditLog, Claim, ClaimStatus, ClaimStatusHistory, Evidence
+from claims.models import AuditLog, Claim, ClaimStatus, ClaimStatusHistory, Evidence, claim
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from claims.models import EvidenceReuseFlag
+from django.db.models import F
+from claims.tasks import detect_duplicate_evidence
+from claims.compliance import ClaimComplianceAnalyzer
+from claims.validators import EvidenceValidator
 
 class ClaimService:
     """
@@ -74,9 +78,24 @@ class ClaimService:
             else ClaimStatus.RESUBMITTED
         )
 
-        claim.status = new_status
-        claim.version += 1
-        claim.save()
+        # claim.status = new_status
+        # claim.version += 1
+        # claim.save()
+
+        updated_rows = Claim.objects.filter(
+            id=claim.id,
+            version=claim.version,
+        ).update(
+            status=new_status,
+            version=F("version") + 1,
+        )
+
+        if updated_rows == 0:
+            raise ValidationError(
+                "Claim was modified concurrently. Please retry."
+            )
+
+        claim.refresh_from_db()
 
         ClaimStatusHistory.objects.create(
             claim=claim,
@@ -120,38 +139,6 @@ class ClaimService:
             uploaded_by=uploaded_by,
         )
 
-        duplicate_evidence = (
-            Evidence.objects.filter(
-                content_hash=evidence.content_hash,
-            )
-            .exclude(id=evidence.id)
-            .first()
-        )
-
-        if duplicate_evidence:
-            EvidenceReuseFlag.objects.create(
-                evidence=evidence,
-                primary_claim=duplicate_evidence.claim,
-                secondary_claim=claim,
-                flagged_by=uploaded_by,
-            )
-
-            AuditLog.objects.create(
-                claim=claim,
-                actor=uploaded_by,
-                action="DUPLICATE_EVIDENCE_DETECTED",
-                old_value=None,
-                new_value={
-                    "original_evidence_id": str(
-                        duplicate_evidence.id
-                    ),
-                    "duplicate_evidence_id": str(
-                        evidence.id
-                    ),
-                    "content_hash": evidence.content_hash,
-                },
-            )
-
         AuditLog.objects.create(
             claim=claim,
             actor=uploaded_by,
@@ -162,6 +149,13 @@ class ClaimService:
                 "file_name": evidence.file_name,
                 "content_hash": evidence.content_hash,
             },
+        )
+
+        # Trigger asynchronous duplicate evidence analysis.
+        # This prevents expensive duplicate checks from slowing
+        # down upload request latency under high concurrency.
+        detect_duplicate_evidence.delay(
+            str(evidence.id)
         )
 
         return evidence
@@ -189,17 +183,40 @@ class ClaimService:
                 "Claim is not available for review."
             )
 
+        # Validate evidence requirements before approval
+        if target_status == ClaimStatus.APPROVED:
+            EvidenceValidator.validate_for_approval(
+                claim
+            )
+
         old_status = claim.status
 
-        claim.status = target_status
-        claim.version += 1
-        claim.save()
+        updated_rows = Claim.objects.filter(
+            id=claim.id,
+            version=claim.version,
+        ).update(
+            status=target_status,
+            version=F("version") + 1,
+        )
+
+        if updated_rows == 0:
+            raise ValidationError(
+                "Claim was modified by another reviewer. Please refresh and retry."
+            )
+
+        claim.refresh_from_db()
 
         ClaimStatusHistory.objects.create(
             claim=claim,
             old_status=old_status,
             new_status=target_status,
             changed_by=reviewer,
+        )
+
+        compliance_analysis = (
+            ClaimComplianceAnalyzer.analyze(
+                claim
+            )
         )
 
         AuditLog.objects.create(
@@ -211,6 +228,8 @@ class ClaimService:
             },
             new_value={
                 "status": target_status,
+                "compliance_analysis":
+                    compliance_analysis,
             },
         )
 
@@ -230,9 +249,24 @@ class ClaimService:
 
         old_status = claim.status
 
-        claim.status = ClaimStatus.FINALIZED
-        claim.version += 1
-        claim.save()
+        # claim.status = ClaimStatus.FINALIZED
+        # claim.version += 1
+        # claim.save()
+
+        updated_rows = Claim.objects.filter(
+            id=claim.id,
+            version=claim.version,
+        ).update(
+            status=ClaimStatus.FINALIZED,
+            version=F("version") + 1,
+        )
+
+        if updated_rows == 0:
+            raise ValidationError(
+                "Claim was modified concurrently. Please retry."
+            )
+
+        claim.refresh_from_db()
 
         ClaimStatusHistory.objects.create(
             claim=claim,
